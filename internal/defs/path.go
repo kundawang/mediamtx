@@ -22,6 +22,11 @@ func (e *PathNoStreamAvailableError) Error() string {
 	return fmt.Sprintf("no stream is available on path '%s'", e.PathName)
 }
 
+// ErrPathRedirectUnsupported is returned by a path manager that cannot resolve
+// a source redirect through Describe. Servers that rely on Describe for
+// redirects treat it as "no redirect available" and keep their regular flow.
+var ErrPathRedirectUnsupported = fmt.Errorf("path redirect is not supported")
+
 // Path is a path.
 type Path interface {
 	Name() string

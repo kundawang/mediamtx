@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -68,6 +69,101 @@ func sessionLocation(publish bool, path string, rawQuery string, secret uuid.UUI
 	}
 
 	return res
+}
+
+// whepRedirectLocation builds the WHEP endpoint URL of a redirect target and
+// makes sure it points to the same host as the incoming request, so that
+// credentials are never leaked to another host.
+func whepRedirectLocation(req *http.Request, target string, rawQuery string) (string, error) {
+	targetURL, err := redirectURL(req, target, rawQuery)
+	if err != nil {
+		return "", err
+	}
+
+	targetURL.Path = strings.TrimSuffix(targetURL.Path, "/") + "/whep"
+	return targetURL.String(), nil
+}
+
+// readPageRedirectLocation builds the read page URL (the directory that hosts
+// reader.js and the WHEP endpoint) of a redirect target.
+func readPageRedirectLocation(req *http.Request, target string, rawQuery string) (string, error) {
+	targetURL, err := redirectURL(req, target, rawQuery)
+	if err != nil {
+		return "", err
+	}
+
+	targetURL.Path = strings.TrimSuffix(targetURL.Path, "/") + "/"
+	return targetURL.String(), nil
+}
+
+// redirectURL resolves a source redirect target against the incoming request
+// and rejects targets hosted on another host, so credentials stay same-site.
+// The incoming query string is preserved, taking precedence over a query that
+// may be embedded in the target.
+func redirectURL(req *http.Request, target string, rawQuery string) (*url.URL, error) {
+	var targetURL *url.URL
+
+	if strings.HasPrefix(target, "/") {
+		// relative path: keep the scheme and host of the incoming request
+		targetURL = &url.URL{
+			Scheme: requestScheme(req),
+			Host:   requestHost(req),
+		}
+
+		var err error
+		targetURL.Path, targetURL.RawQuery, err = splitPathQuery(target)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		targetURL, err = url.Parse(target)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redirect target: %w", err)
+		}
+
+		if !strings.EqualFold(targetURL.Host, requestHost(req)) {
+			return nil, fmt.Errorf("redirect target '%s' is on a different host", target)
+		}
+
+		if targetURL.Scheme == "" {
+			targetURL.Scheme = requestScheme(req)
+		}
+	}
+
+	if rawQuery != "" {
+		targetURL.RawQuery = rawQuery
+	}
+
+	return targetURL, nil
+}
+
+// splitPathQuery splits a relative redirect target into its path and query.
+func splitPathQuery(target string) (string, string, error) {
+	if i := strings.IndexByte(target, '?'); i >= 0 {
+		if _, err := url.ParseQuery(target[i+1:]); err != nil {
+			return "", "", fmt.Errorf("invalid redirect target: %w", err)
+		}
+		return target[:i], target[i+1:], nil
+	}
+	return target, "", nil
+}
+
+func requestHost(req *http.Request) string {
+	if req.URL.Host != "" {
+		return req.URL.Host
+	}
+	return req.Host
+}
+
+func requestScheme(req *http.Request) string {
+	if req.URL.Scheme != "" {
+		return req.URL.Scheme
+	}
+	if req.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 type httpServer struct {
@@ -176,6 +272,74 @@ func (s *httpServer) checkAuthOutsideSession(ctx *gin.Context, pathName string, 
 	return true
 }
 
+// checkReaderRedirect resolves a source redirect for a WHEP read request.
+// It returns true when the request has been handled (a redirect response or an
+// error was written), and false when the request can proceed normally.
+func (s *httpServer) checkReaderRedirect(ctx *gin.Context, pathName string) bool {
+	creds := &auth.Credentials{}
+	creds.FromHTTP(ctx.Request)
+
+	res, err := s.pathManager.Describe(defs.PathDescribeReq{
+		Author: &logger.InlineWriter{
+			Parent: s,
+			Prefix: fmt.Sprintf("[conn %v]", httpp.RemoteAddr(ctx)),
+		},
+		AccessRequest: defs.PathAccessRequest{
+			Name:                 pathName,
+			Query:                ctx.Request.URL.RawQuery,
+			UserAgent:            ctx.Request.UserAgent(),
+			Proto:                auth.ProtocolWebRTC,
+			Credentials:          creds,
+			IP:                   net.ParseIP(ctx.ClientIP()),
+			EnableAskCredentials: true,
+		},
+	})
+	if err != nil {
+		// a path manager without a Describe implementation cannot resolve
+		// redirects: keep the legacy (non-redirect) flow
+		if errors.Is(err, defs.ErrPathRedirectUnsupported) {
+			return false
+		}
+
+		if terr, ok := errors.AsType[*auth.Error](err); ok {
+			if terr.AskCredentials {
+				ctx.Header("WWW-Authenticate", `Basic realm="mediamtx"`)
+				s.writeErrorNoLog(ctx, http.StatusUnauthorized, fmt.Errorf("authentication error"))
+				return true
+			}
+
+			s.writeErrorNoLog(ctx, http.StatusUnauthorized, fmt.Errorf("authentication error"))
+			return true
+		}
+
+		if _, ok := errors.AsType[*defs.PathNoStreamAvailableError](err); ok {
+			s.writeErrorNoLog(ctx, http.StatusNotFound, err)
+			return true
+		}
+
+		s.writeErrorNoLog(ctx, http.StatusBadRequest, err)
+		return true
+	}
+
+	if res.Redirect == "" {
+		// not a redirect source: let the regular flow handle the request
+		return false
+	}
+
+	location, err := whepRedirectLocation(ctx.Request, res.Redirect, ctx.Request.URL.RawQuery)
+	if err != nil {
+		s.writeErrorNoLog(ctx, http.StatusBadRequest, err)
+		return true
+	}
+
+	// 307 preserves the POST method, the SDP body and (for same-host targets)
+	// the Authorization header, so the browser re-authenticates on the target.
+	ctx.Header("Location", location)
+	ctx.Header("Access-Control-Expose-Headers", "ETag, ID, Accept-Patch, Link, Location")
+	ctx.Writer.WriteHeader(http.StatusTemporaryRedirect)
+	return true
+}
+
 func (s *httpServer) onWHIPOptions(ctx *gin.Context, pathName string, publish bool) {
 	if !s.checkAuthOutsideSession(ctx, pathName, publish) {
 		return
@@ -204,6 +368,13 @@ func (s *httpServer) onWHIPPost(ctx *gin.Context, pathName string, publish bool)
 
 	offer, err := io.ReadAll(&customLimitReader{ctx.Request.Body, maxInboundSDPSize})
 	if err != nil {
+		return
+	}
+
+	// WHEP reads support source redirects, while WHIP publishes do not.
+	// The check also authenticates the request, so an unauthenticated client
+	// never learns the redirect target.
+	if !publish && s.checkReaderRedirect(ctx, pathName) {
 		return
 	}
 
@@ -356,6 +527,16 @@ func (s *httpServer) onPage(ctx *gin.Context, pathName string, publish bool) {
 		return
 	}
 
+	// read pages follow source redirects, so that the browser entry point
+	// lands on the same target as the WHEP request.
+	if !publish {
+		if location := s.resolveReadPageRedirect(ctx, pathName); location != "" {
+			ctx.Header("Location", location)
+			ctx.Writer.WriteHeader(http.StatusFound)
+			return
+		}
+	}
+
 	// Do not cache the HTML page.
 	// This prevents a bug in Firefox in which, when the page
 	// is loaded in an iframe and the iframe is deleted and recreated,
@@ -369,6 +550,39 @@ func (s *httpServer) onPage(ctx *gin.Context, pathName string, publish bool) {
 	} else {
 		ctx.Writer.Write(readIndex)
 	}
+}
+
+// resolveReadPageRedirect returns the URL of the target read page when the
+// requested path is a redirect source, and an empty string otherwise.
+// Authentication has already succeeded when this function is called.
+func (s *httpServer) resolveReadPageRedirect(ctx *gin.Context, pathName string) string {
+	creds := &auth.Credentials{}
+	creds.FromHTTP(ctx.Request)
+
+	res, err := s.pathManager.Describe(defs.PathDescribeReq{
+		Author: &logger.InlineWriter{
+			Parent: s,
+			Prefix: fmt.Sprintf("[conn %v]", httpp.RemoteAddr(ctx)),
+		},
+		AccessRequest: defs.PathAccessRequest{
+			Name:        pathName,
+			Query:       ctx.Request.URL.RawQuery,
+			UserAgent:   ctx.Request.UserAgent(),
+			Proto:       auth.ProtocolWebRTC,
+			Credentials: creds,
+			IP:          net.ParseIP(ctx.ClientIP()),
+			SkipAuth:    true,
+		},
+	})
+	if err != nil || res.Redirect == "" {
+		return ""
+	}
+
+	location, err := readPageRedirectLocation(ctx.Request, res.Redirect, ctx.Request.URL.RawQuery)
+	if err != nil {
+		return ""
+	}
+	return location
 }
 
 func (s *httpServer) middlewarePreflightRequests(ctx *gin.Context) {
