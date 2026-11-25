@@ -282,12 +282,17 @@ type Stream struct {
 	ReplaceNTP            bool
 	Parent                logger.Writer
 
+	// Continuous enables monotonic timestamp continuation when replacing the
+	// active SubStream, without enabling the always-available offline filler.
+	Continuous bool
+
 	outDescMutex sync.RWMutex
 	outDesc      *description.Session
 
 	offlineDesc          *description.Session
 	mutex                sync.RWMutex
 	subStream            *SubStream
+	pendingSubStream     *SubStream
 	offlineSubStream     *offlineSubStream
 	inboundBytes         atomic.Uint64
 	outboundBytes        atomic.Uint64
@@ -350,6 +355,7 @@ func (s *Stream) Initialize() error {
 		sm := &streamMedia{
 			origMedia:            origMedia,
 			alwaysAvailable:      s.AlwaysAvailable,
+			continuous:           s.Continuous,
 			rtpMaxPayloadSize:    s.RTPMaxPayloadSize,
 			replaceNTP:           s.ReplaceNTP,
 			inboundBytes:         &s.inboundBytes,

@@ -130,6 +130,8 @@ type path struct {
 	confMutex                      sync.RWMutex
 	source                         defs.Source
 	stream                         *stream.Stream
+	backupMu                       sync.RWMutex
+	backupManager                  *backupSourceManager
 	recorder                       *recorder.Recorder
 	forwardManager                 *forward.Manager
 	availableTime                  time.Time
@@ -158,6 +160,8 @@ type path struct {
 	chRemoveReader            chan defs.PathRemoveReaderReq
 	chAPIPathsGet             chan pathAPIPathsGetReq
 	chAPIStaticSourcesGet     chan pathAPIStaticSourcesGetReq
+	chBackupSetReady          chan defs.PathSourceStaticSetReadyReq
+	chBackupSetNotReady       chan defs.PathSourceStaticSetNotReadyReq
 
 	// out
 	done chan struct{}
@@ -184,6 +188,8 @@ func (pa *path) initialize() {
 	pa.chRemoveReader = make(chan defs.PathRemoveReaderReq)
 	pa.chAPIPathsGet = make(chan pathAPIPathsGetReq)
 	pa.chAPIStaticSourcesGet = make(chan pathAPIStaticSourcesGetReq)
+	pa.chBackupSetReady = make(chan defs.PathSourceStaticSetReadyReq)
+	pa.chBackupSetNotReady = make(chan defs.PathSourceStaticSetNotReadyReq)
 	pa.done = make(chan struct{})
 
 	pa.forwardManager = &forward.Manager{
@@ -263,6 +269,12 @@ func (pa *path) run() {
 		}
 	}
 
+	if pa.conf.HasBackupSource() {
+		mgr := newBackupSourceManager(pa, pa.conf)
+		pa.setBackupManager(mgr)
+		mgr.start()
+	}
+
 	onUnInitHook := hooks.OnInit(hooks.OnInitParams{
 		Logger:          pa,
 		ExternalCmdPool: pa.externalCmdPool,
@@ -290,6 +302,14 @@ func (pa *path) run() {
 
 	for _, req := range pa.readerAddRequestsOnHold {
 		req.Res <- defs.PathAddReaderRes{Err: fmt.Errorf("terminated")}
+	}
+
+	pa.backupMu.Lock()
+	backupMgr := pa.backupManager
+	pa.backupManager = nil
+	pa.backupMu.Unlock()
+	if backupMgr != nil {
+		backupMgr.close()
 	}
 
 	if pa.source != nil {
@@ -400,6 +420,12 @@ func (pa *path) runInner() error {
 		case req := <-pa.chAPIStaticSourcesGet:
 			pa.doAPIStaticSourcesGet(req)
 
+		case req := <-pa.chBackupSetReady:
+			pa.doBackupSetReady(req)
+
+		case req := <-pa.chBackupSetNotReady:
+			pa.doBackupSetNotReady(req)
+
 		case <-pa.ctx.Done():
 			return fmt.Errorf("terminated")
 		}
@@ -456,6 +482,8 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 		pa.source.(*staticsources.Handler).ReloadConf(newConf)
 	}
 
+	pa.reconcileBackupSource(oldConf, newConf)
+
 	pa.forwardManager.ReloadConf(newConf.Forward)
 
 	if pa.recorder != nil &&
@@ -474,6 +502,52 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 	if newConf.Record && pa.stream != nil && pa.recorder == nil &&
 		(!newConf.AlwaysAvailable || newConf.AlwaysAvailableRecorded || pa.isOnline()) {
 		pa.startRecording()
+	}
+}
+
+// reconcileBackupSource creates, reloads, recreates or destroys the backup
+// source manager according to a configuration change. It runs on the path
+// goroutine.
+func (pa *path) reconcileBackupSource(oldConf *conf.Path, newConf *conf.Path) {
+	oldURL := ""
+	if oldConf != nil {
+		oldURL = oldConf.BackupSource
+	}
+	newURL := newConf.BackupSource
+	mgr := pa.backupManager
+
+	switch {
+	case newURL == "" && mgr != nil:
+		active := mgr.isActive()
+		mgr.close()
+		pa.setBackupManager(nil)
+		pa.Log(logger.Info, "backup source removed from configuration")
+
+		// it was serving readers with no main publisher behind it
+		if active && pa.stream != nil {
+			pa.setNotAvailable()
+		}
+
+	case newURL != "" && mgr == nil:
+		mgr = newBackupSourceManager(pa, newConf)
+		pa.setBackupManager(mgr)
+		mgr.start()
+
+	case newURL != "" && mgr != nil && oldURL != newURL:
+		active := mgr.isActive()
+		mgr.close()
+		mgr = newBackupSourceManager(pa, newConf)
+		pa.setBackupManager(mgr)
+		mgr.start()
+
+		if active && pa.stream != nil {
+			// old connection was serving and has been replaced: restart the
+			// standard lifecycle until the new backup connects.
+			pa.setNotAvailable()
+		}
+
+	case newURL != "" && mgr != nil:
+		mgr.reloadConf(newConf)
 	}
 }
 
@@ -534,6 +608,71 @@ func (pa *path) doSourceStaticSetNotReady(req defs.PathSourceStaticSetNotReadyRe
 
 	if pa.conf.HasOnDemandStaticSource() && pa.onDemandStaticSourceState != pathOnDemandStateInitial {
 		pa.onDemandStaticSourceStop("an error occurred")
+	}
+}
+
+func (pa *path) doBackupSetReady(req defs.PathSourceStaticSetReadyReq) {
+	mgr := pa.backupManager
+	if mgr == nil {
+		req.Res <- defs.PathSourceStaticSetReadyRes{Err: fmt.Errorf("backup source is disabled")}
+		return
+	}
+
+	// the backup can only attach to a Stream created by the main publisher;
+	// before that, ask the handler to retry.
+	if pa.stream == nil {
+		req.Res <- defs.PathSourceStaticSetReadyRes{Err: fmt.Errorf("main stream is not available yet")}
+		return
+	}
+
+	if err := backupDescIsCompatible(req.Desc, pa.stream.OrigDesc); err != nil {
+		pa.Log(logger.Warn, "backup source is not compatible: %v", err)
+		req.Res <- defs.PathSourceStaticSetReadyRes{Err: err}
+		return
+	}
+
+	subStream := &stream.SubStream{
+		Stream:        pa.stream,
+		InDesc:        req.Desc,
+		UseRTPPackets: req.UseRTPPackets,
+	}
+
+	err := subStream.InitializeParked()
+	if err != nil {
+		req.Res <- defs.PathSourceStaticSetReadyRes{Err: err}
+		return
+	}
+
+	mgr.sub.Store(subStream)
+	pa.Log(logger.Info, "backup source is connected and standing by")
+
+	req.Res <- defs.PathSourceStaticSetReadyRes{SubStream: subStream}
+}
+
+func (pa *path) doBackupSetNotReady(req defs.PathSourceStaticSetNotReadyReq) {
+	mgr := pa.backupManager
+
+	// release the static-source handshake before tearing the path down, to
+	// avoid deadlocking its run/reconnect loop.
+	close(req.Res)
+
+	if mgr == nil {
+		return
+	}
+
+	sub := mgr.sub.Swap(nil)
+	wasActive := sub != nil && sub.IsActive()
+	if sub != nil {
+		sub.Close()
+	}
+
+	if wasActive {
+		pa.Log(logger.Warn, "backup source is gone and no main publisher is available")
+		// nothing left to serve: apply the standard teardown, disconnecting
+		// existing readers and releasing the Stream.
+		if pa.stream != nil {
+			pa.setNotAvailable()
+		}
 	}
 }
 
@@ -600,6 +739,41 @@ func (pa *path) doAddPublisher(req defs.PathAddPublisherReq) {
 		pa.Log(logger.Info, "closing existing publisher")
 		pa.source.(defs.Publisher).Close()
 		pa.executeRemovePublisher()
+	}
+
+	// The backup source is currently serving on the existing Stream. Attach
+	// the returning main publisher as a parked, key-frame-gated SubStream so
+	// readers and their RTSP sessions are not interrupted.
+	if pa.backupManager != nil && pa.stream != nil && pa.backupManager.isActive() {
+		subStream := &stream.SubStream{
+			Stream:          pa.stream,
+			InDesc:          req.Desc,
+			UseRTPPackets:   req.UseRTPPackets,
+			WaitForKeyFrame: true,
+			OnActivated: func() {
+				pa.Log(logger.Info, "key frame received, switched back to main publisher")
+			},
+		}
+
+		err := subStream.InitializeParked()
+		if err != nil {
+			req.Res <- defs.PathAddPublisherRes{Err: err}
+			return
+		}
+
+		pa.source = req.Author
+
+		req.Author.Log(logger.Info, "is publishing to path '%s', waiting for a key frame",
+			pa.name)
+
+		if pa.conf.HasOnDemandPublisher() && pa.onDemandPublisherState != pathOnDemandStateInitial {
+			pa.onDemandPublisherReadyTimer.Stop()
+			pa.onDemandPublisherReadyTimer = emptyTimer()
+			pa.onDemandPublisherScheduleClose()
+		}
+
+		req.Res <- defs.PathAddPublisherRes{SubStream: subStream}
+		return
 	}
 
 	if !pa.conf.AlwaysAvailable {
@@ -740,6 +914,16 @@ func (pa *path) doAPIPathsGet(req pathAPIPathsGetReq) {
 				v := pa.source.APISourceDescribe()
 				return v
 			}(),
+			BackupSource: func() *defs.APIPathBackupSource {
+				state, ok := pa.BackupSourceState()
+				if !ok {
+					return nil
+				}
+				return &defs.APIPathBackupSource{
+					URL:   pa.SafeConf().BackupSource,
+					State: state.String(),
+				}
+			}(),
 			Tracks: func() []defs.APIPathTrackCodec {
 				if !pa.isAvailable() {
 					return []defs.APIPathTrackCodec{}
@@ -809,6 +993,27 @@ func (pa *path) SafeConf() *conf.Path {
 	pa.confMutex.RLock()
 	defer pa.confMutex.RUnlock()
 	return pa.conf
+}
+
+// setBackupManager publishes the backup manager. It runs on the path goroutine
+// and uses backupMu solely to synchronize with external state observers.
+func (pa *path) setBackupManager(m *backupSourceManager) {
+	pa.backupMu.Lock()
+	pa.backupManager = m
+	pa.backupMu.Unlock()
+}
+
+// BackupSourceState returns the observable state of the backup source, and
+// whether a backup source is configured. It is safe for concurrent use.
+func (pa *path) BackupSourceState() (BackupSourceState, bool) {
+	pa.backupMu.RLock()
+	mgr := pa.backupManager
+	pa.backupMu.RUnlock()
+
+	if mgr == nil {
+		return BackupSourceStateIdle, false
+	}
+	return mgr.State(), true
 }
 
 func (pa *path) ExternalCmdEnv() externalcmd.Environment {
@@ -945,6 +1150,7 @@ func (pa *path) setAvailable(
 		WriteQueueSize:        pa.writeQueueSize,
 		RTPMaxPayloadSize:     pa.rtpMaxPayloadSize,
 		ReplaceNTP:            replaceNTP,
+		Continuous:            pa.conf.HasBackupSource() && !pa.conf.AlwaysAvailable,
 		Parent:                pa,
 	}
 	err := pa.stream.Initialize()
@@ -1077,6 +1283,14 @@ func (pa *path) executeRemoveReader(r defs.Reader) {
 }
 
 func (pa *path) executeRemovePublisher() {
+	if !pa.conf.AlwaysAvailable &&
+		pa.backupManager != nil &&
+		pa.backupManager.takeOverFromPublisher() {
+		// the backup source keeps the Stream (and existing readers) alive
+		pa.source = nil
+		return
+	}
+
 	if !pa.conf.AlwaysAvailable {
 		pa.setNotAvailable()
 	} else {

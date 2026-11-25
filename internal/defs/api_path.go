@@ -69,23 +69,30 @@ type APIPathReader struct {
 	ID   string            `json:"id"`
 }
 
+// APIPathBackupSource is the runtime status of a path backup source.
+type APIPathBackupSource struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+}
+
 // APIPath is a path.
 type APIPath struct {
-	Name                 string              `json:"name"`
-	ConfName             string              `json:"confName"`
-	Ready                bool                `json:"ready" deprecated:"true"`
-	ReadyTime            *time.Time          `json:"readyTime" deprecated:"true"`
-	Available            bool                `json:"available"`
-	AvailableTime        *time.Time          `json:"availableTime"`
-	Online               bool                `json:"online"`
-	OnlineTime           *time.Time          `json:"onlineTime"`
-	Source               *APIPathSource      `json:"source"`
-	Tracks               []APIPathTrackCodec `json:"tracks" deprecated:"true"`
-	Tracks2              []APIPathTrack      `json:"tracks2"`
-	Readers              []APIPathReader     `json:"readers"`
-	InboundBytes         uint64              `json:"inboundBytes"`
-	OutboundBytes        uint64              `json:"outboundBytes"`
-	InboundFramesInError uint64              `json:"inboundFramesInError"`
+	Name                 string               `json:"name"`
+	ConfName             string               `json:"confName"`
+	Ready                bool                 `json:"ready" deprecated:"true"`
+	ReadyTime            *time.Time           `json:"readyTime" deprecated:"true"`
+	Available            bool                 `json:"available"`
+	AvailableTime        *time.Time           `json:"availableTime"`
+	Online               bool                 `json:"online"`
+	OnlineTime           *time.Time           `json:"onlineTime"`
+	Source               *APIPathSource       `json:"source"`
+	BackupSource         *APIPathBackupSource `json:"backupSource,omitempty"`
+	Tracks               []APIPathTrackCodec  `json:"tracks" deprecated:"true"`
+	Tracks2              []APIPathTrack       `json:"tracks2"`
+	Readers              []APIPathReader      `json:"readers"`
+	InboundBytes         uint64               `json:"inboundBytes"`
+	OutboundBytes        uint64               `json:"outboundBytes"`
+	InboundFramesInError uint64               `json:"inboundFramesInError"`
 
 	// deprecated
 	BytesReceived uint64 `json:"bytesReceived" deprecated:"true"`

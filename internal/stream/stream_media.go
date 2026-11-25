@@ -15,6 +15,7 @@ import (
 type streamMedia struct {
 	origMedia            *description.Media
 	alwaysAvailable      bool
+	continuous           bool
 	rtpMaxPayloadSize    int
 	replaceNTP           bool
 	inboundBytes         *atomic.Uint64
@@ -42,6 +43,7 @@ func (sm *streamMedia) initialize() error {
 		sf := &streamFormat{
 			origFormat:           origFormat,
 			alwaysAvailable:      sm.alwaysAvailable,
+			continuous:           sm.continuous,
 			rtpMaxPayloadSize:    sm.rtpMaxPayloadSize,
 			replaceNTP:           sm.replaceNTP,
 			inboundFramesInError: sm.inboundFramesInError,

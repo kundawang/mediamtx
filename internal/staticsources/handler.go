@@ -79,6 +79,10 @@ type Handler struct {
 	PathManager       handlerPathManager
 	Parent            handlerParent
 
+	// RetryPause overrides the default pause between connection attempts.
+	// A zero value keeps the default.
+	RetryPause time.Duration
+
 	ctx       context.Context
 	ctxCancel func()
 	instance  staticSource
@@ -289,7 +293,11 @@ func (s *Handler) run() {
 			s.mutex.Unlock()
 
 			recreating = true
-			recreateTimer = time.NewTimer(retryPause)
+			pause := s.RetryPause
+			if pause == 0 {
+				pause = retryPause
+			}
+			recreateTimer = time.NewTimer(pause)
 
 		case req := <-s.chInstanceSetReady:
 			s.Parent.StaticSourceHandlerSetReady(s.ctx, req)

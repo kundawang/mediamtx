@@ -30,6 +30,7 @@ func (ssf *subStreamFormat) initialize() error {
 
 	if ssf.streamFormat.rtpEncoder == nil && (!ssf.useRTPPackets ||
 		ssf.streamFormat.alwaysAvailable ||
+		ssf.streamFormat.continuous ||
 		ssf.streamFormat.forceRemux) {
 		var err error
 		ssf.streamFormat.rtpEncoder, err = newRTPEncoder(
@@ -93,6 +94,23 @@ func (ssf *subStreamFormat) writeUnit(u *unit.Unit) {
 
 func (ssf *subStreamFormat) writeUnitInner(u *unit.Unit) error {
 	if ssf.streamFormat.alwaysAvailable {
+		u.PTS += ssf.streamFormat.ptsOffset
+
+		ssf.streamFormat.updateLastTime(
+			multiplyAndDivide2(time.Duration(u.PTS),
+				time.Second, time.Duration(ssf.streamFormat.outFormat.ClockRate())))
+	}
+
+	if ssf.streamFormat.continuous {
+		// Rebase on the first unit that flows after an activation, using its
+		// own PTS as origin. This makes the output timeline continue exactly
+		// where the previous sub stream stopped regardless of the source's
+		// arbitrary RTP timestamp base.
+		if ssf.streamFormat.needRebase {
+			ssf.streamFormat.ptsOffset = ssf.streamFormat.rebaseTarget - u.PTS
+			ssf.streamFormat.needRebase = false
+		}
+
 		u.PTS += ssf.streamFormat.ptsOffset
 
 		ssf.streamFormat.updateLastTime(

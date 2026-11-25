@@ -943,6 +943,15 @@ components:
           allOf:
             - $ref: "#/components/schemas/PathSource"
           nullable: true
+        backupSource:
+          type: object
+          nullable: true
+          properties:
+            url:
+              type: string
+            state:
+              type: string
+              enum: [idle, ready, active]
         tracks:
           type: array
           deprecated: true
@@ -971,6 +980,9 @@ components:
           type: boolean
           nullable: true
           deprecated: true
+        backupSource:
+          type: string
+          description: RTSP URL of a pre-connected backup live source
         fallback:
           type: string
           nullable: true

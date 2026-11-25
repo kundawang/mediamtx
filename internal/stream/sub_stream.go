@@ -3,6 +3,7 @@ package stream
 import (
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
@@ -91,6 +92,14 @@ type SubStream struct {
 	InDesc        *description.Session
 	UseRTPPackets bool
 
+	// WaitForKeyFrame keeps a parked SubStream pending and promotes it
+	// automatically when the first video key frame is received.
+	WaitForKeyFrame bool
+
+	// OnActivated is called after a key-frame promotion, outside the Stream
+	// lock. It must not block for long.
+	OnActivated func()
+
 	medias map[*description.Media]*subStreamMedia
 }
 
@@ -119,21 +128,9 @@ func (ss *SubStream) Initialize() error {
 		ss.InDesc = ss.Stream.OrigDesc
 	}
 
-	ss.medias = make(map[*description.Media]*subStreamMedia)
-
-	for i, inMedia := range ss.InDesc.Medias {
-		origMedia := ss.Stream.OrigDesc.Medias[i]
-
-		ssm := &subStreamMedia{
-			inMedia:       inMedia,
-			streamMedia:   ss.Stream.medias[origMedia],
-			useRTPPackets: ss.UseRTPPackets,
-		}
-		err := ssm.initialize()
-		if err != nil {
-			return err
-		}
-		ss.medias[inMedia] = ssm
+	err := ss.initializeMedias()
+	if err != nil {
+		return err
 	}
 
 	if ss.Stream.AlwaysAvailable {
@@ -165,17 +162,168 @@ func (ss *SubStream) Initialize() error {
 	return nil
 }
 
+// InitializeParked initializes the SubStream without attaching it to the
+// Stream. If WaitForKeyFrame is set, it is registered as pending and promoted
+// on the first key frame.
+func (ss *SubStream) InitializeParked() error {
+	if ss.InDesc == nil {
+		ss.InDesc = ss.Stream.OrigDesc
+	} else if !ss.Stream.AlwaysAvailable {
+		err := mediasAreCompatible(ss.Stream.OrigDesc.Medias, ss.InDesc.Medias)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := ss.initializeMedias()
+	if err != nil {
+		return err
+	}
+
+	ss.Stream.mutex.Lock()
+	if ss.WaitForKeyFrame {
+		ss.Stream.pendingSubStream = ss
+	}
+	ss.Stream.mutex.Unlock()
+
+	return nil
+}
+
+func (ss *SubStream) initializeMedias() error {
+	ss.medias = make(map[*description.Media]*subStreamMedia)
+
+	for i, inMedia := range ss.InDesc.Medias {
+		origMedia := ss.Stream.OrigDesc.Medias[i]
+
+		ssm := &subStreamMedia{
+			inMedia:       inMedia,
+			streamMedia:   ss.Stream.medias[origMedia],
+			useRTPPackets: ss.UseRTPPackets,
+		}
+		err := ssm.initialize()
+		if err != nil {
+			return err
+		}
+		ss.medias[inMedia] = ssm
+	}
+
+	return nil
+}
+
+// Activate attaches the SubStream to the Stream and rebases timestamps so that
+// the output timeline continues from the last received frame. It is used to
+// promote a parked SubStream.
+func (ss *SubStream) Activate() {
+	st := ss.Stream
+
+	st.mutex.Lock()
+	st.pendingSubStream = nil
+	st.subStream = ss
+	ss.markRebase()
+	st.mutex.Unlock()
+}
+
+// IsActive reports whether the SubStream is the one currently writing to the
+// Stream.
+func (ss *SubStream) IsActive() bool {
+	st := ss.Stream
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+	return st.subStream == ss
+}
+
+// Close detaches the SubStream from the Stream if it is active or pending.
+func (ss *SubStream) Close() {
+	st := ss.Stream
+	st.mutex.Lock()
+	if st.subStream == ss {
+		st.subStream = nil
+	}
+	if st.pendingSubStream == ss {
+		st.pendingSubStream = nil
+	}
+	st.mutex.Unlock()
+}
+
+func (ss *SubStream) markRebase() {
+	if !ss.Stream.Continuous {
+		return
+	}
+
+	for _, ssm := range ss.medias {
+		for _, ssf := range ssm.formats {
+			if ss.Stream.firstTimeReceived {
+				ptsOffsetGo := ss.Stream.lastPTS + time.Since(ss.Stream.lastSystemTime)
+				clockRate := int64(ssf.streamFormat.outFormat.ClockRate())
+				ssf.streamFormat.rebaseTarget = multiplyAndDivide(
+					int64(ptsOffsetGo), clockRate, int64(time.Second))
+				ssf.streamFormat.needRebase = true
+			} else {
+				ssf.streamFormat.ptsOffset = 0
+				ssf.streamFormat.needRebase = false
+			}
+		}
+	}
+}
+
+// promotePending is called by WriteUnit when the pending SubStream receives
+// its first key frame.
+func (st *Stream) promotePending(ss *SubStream) bool {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+
+	if st.pendingSubStream != ss {
+		return false
+	}
+
+	st.pendingSubStream = nil
+	st.subStream = ss
+	ss.markRebase()
+	return true
+}
+
 // WriteUnit writes a Unit.
 func (ss *SubStream) WriteUnit(inMedia *description.Media, inFormat format.Format, u *unit.Unit) {
-	ss.Stream.mutex.RLock()
-	defer ss.Stream.mutex.RUnlock()
+	st := ss.Stream
 
-	if ss.Stream.subStream != ss {
+	st.mutex.RLock()
+	active := st.subStream == ss
+	pending := st.pendingSubStream == ss && ss.WaitForKeyFrame
+	st.mutex.RUnlock()
+
+	if !active && !pending {
 		return
 	}
 
 	ssm := ss.medias[inMedia]
+	if ssm == nil {
+		return
+	}
 	ssf := ssm.formats[inFormat]
+	if ssf == nil {
+		return
+	}
+
+	if pending {
+		if !subStreamUnitIsKeyFrame(u) {
+			return
+		}
+
+		if !st.promotePending(ss) {
+			return
+		}
+
+		if ss.OnActivated != nil {
+			ss.OnActivated()
+		}
+	}
+
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+
+	if st.subStream != ss {
+		return
+	}
 
 	ssf.writeUnit(u)
 }

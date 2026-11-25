@@ -53,6 +53,9 @@ type streamFormat struct {
 	outFormat     format.Format
 	forceRemux    bool
 	ptsOffset     int64
+	continuous    bool
+	needRebase    bool
+	rebaseTarget  int64
 	formatUpdater formatUpdater
 	unitRemuxer   unitRemuxer
 	rtpEncoder    rtpEncoder

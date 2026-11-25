@@ -222,6 +222,9 @@ type Path struct {
 	Fallback                   *string  `json:"fallback,omitempty" deprecated:"true"`
 	UseAbsoluteTimestamp       bool     `json:"useAbsoluteTimestamp"`
 
+	// Backup source
+	BackupSource string `json:"backupSource"`
+
 	// Always available
 	AlwaysAvailable         bool                   `json:"alwaysAvailable"`
 	AlwaysAvailableTracks   []AlwaysAvailableTrack `json:"alwaysAvailableTracks"`
@@ -828,6 +831,26 @@ func (pconf *Path) validate(
 		}
 	}
 
+	if pconf.BackupSource != "" {
+		if !strings.HasPrefix(pconf.BackupSource, "rtsp://") &&
+			!strings.HasPrefix(pconf.BackupSource, "rtsps://") &&
+			!strings.HasPrefix(pconf.BackupSource, "rtsp+http://") &&
+			!strings.HasPrefix(pconf.BackupSource, "rtsps+http://") &&
+			!strings.HasPrefix(pconf.BackupSource, "rtsp+ws://") &&
+			!strings.HasPrefix(pconf.BackupSource, "rtsps+ws://") {
+			return fmt.Errorf("'backupSource' must be a RTSP URL")
+		}
+
+		_, err := validateURL(pconf.BackupSource)
+		if err != nil {
+			return err
+		}
+
+		if pconf.Regexp != nil {
+			return fmt.Errorf("'backupSource' cannot be used in a path with a regular expression (or path 'all_others')")
+		}
+	}
+
 	// Always available
 
 	if pconf.AlwaysAvailable {
@@ -998,6 +1021,11 @@ func (pconf *Path) Equal(other *Path) bool {
 // HasStaticSource checks whether the path has a static source.
 func (pconf Path) HasStaticSource() bool {
 	return pconf.Source != "publisher" && pconf.Source != "redirect"
+}
+
+// HasBackupSource checks whether the path has a backup source.
+func (pconf Path) HasBackupSource() bool {
+	return pconf.BackupSource != ""
 }
 
 // HasOnDemandStaticSource checks whether the path has a on demand static source.
