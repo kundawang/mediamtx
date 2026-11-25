@@ -1115,6 +1115,8 @@ components:
           type: string
         recordSegmentDuration:
           type: string
+        recordWindow:
+          type: string
         rpiCameraAWB:
           type: string
         rpiCameraAWBGains:

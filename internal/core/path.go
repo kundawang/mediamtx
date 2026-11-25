@@ -466,6 +466,7 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 			newConf.RecordMaxPartSize != oldConf.RecordMaxPartSize ||
 			newConf.RecordSegmentDuration != oldConf.RecordSegmentDuration ||
 			newConf.RecordDeleteAfter != oldConf.RecordDeleteAfter ||
+			newConf.RecordWindow != oldConf.RecordWindow ||
 			newConf.AlwaysAvailableRecorded != oldConf.AlwaysAvailableRecorded) {
 		pa.recorder.Close()
 		pa.recorder = nil
@@ -1028,23 +1029,28 @@ func (pa *path) setNotAvailable() {
 }
 
 func (pa *path) startRecording() {
+	// Capture the configuration: segment callbacks run on recorder goroutines
+	// while pa.conf may be swapped by a configuration reload.
+	conf := pa.conf
+
 	pa.recorder = &recorder.Recorder{
-		PathFormat:      pa.conf.RecordPath,
-		Format:          pa.conf.RecordFormat,
-		PartDuration:    time.Duration(pa.conf.RecordPartDuration),
-		MaxPartSize:     pa.conf.RecordMaxPartSize,
-		SegmentDuration: time.Duration(pa.conf.RecordSegmentDuration),
+		PathFormat:      conf.RecordPath,
+		Format:          conf.RecordFormat,
+		PartDuration:    time.Duration(conf.RecordPartDuration),
+		MaxPartSize:     conf.RecordMaxPartSize,
+		SegmentDuration: time.Duration(conf.RecordSegmentDuration),
 		PathName:        pa.name,
 		Stream:          pa.stream,
+		Window:          conf.RecordWindowParsed,
 		OnSegmentCreate: func(segmentPath string) {
-			if pa.conf.RunOnRecordSegmentCreate != "" {
+			if conf.RunOnRecordSegmentCreate != "" {
 				env := pa.ExternalCmdEnv()
 				env["MTX_SEGMENT_PATH"] = segmentPath
 
 				pa.Log(logger.Info, "runOnRecordSegmentCreate command launched")
 				cmd := &externalcmd.Cmd{
 					Pool:    pa.externalCmdPool,
-					Cmdstr:  pa.conf.RunOnRecordSegmentCreate,
+					Cmdstr:  conf.RunOnRecordSegmentCreate,
 					Restart: false,
 					Env:     env,
 				}
@@ -1052,7 +1058,7 @@ func (pa *path) startRecording() {
 			}
 		},
 		OnSegmentComplete: func(segmentPath string, segmentDuration time.Duration) {
-			if pa.conf.RunOnRecordSegmentComplete != "" {
+			if conf.RunOnRecordSegmentComplete != "" {
 				env := pa.ExternalCmdEnv()
 				env["MTX_SEGMENT_PATH"] = segmentPath
 				env["MTX_SEGMENT_DURATION"] = strconv.FormatFloat(segmentDuration.Seconds(), 'f', -1, 64)
@@ -1060,7 +1066,7 @@ func (pa *path) startRecording() {
 				pa.Log(logger.Info, "runOnRecordSegmentComplete command launched")
 				cmd := &externalcmd.Cmd{
 					Pool:    pa.externalCmdPool,
-					Cmdstr:  pa.conf.RunOnRecordSegmentComplete,
+					Cmdstr:  conf.RunOnRecordSegmentComplete,
 					Restart: false,
 					Env:     env,
 				}

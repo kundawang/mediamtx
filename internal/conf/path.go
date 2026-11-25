@@ -18,6 +18,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
 
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/recordwindow"
 )
 
 var (
@@ -239,14 +240,16 @@ type Path struct {
 	Forward Forward `json:"forward"`
 
 	// Record
-	Record                bool         `json:"record"`
-	Playback              *bool        `json:"playback,omitempty" deprecated:"true"`
-	RecordPath            string       `json:"recordPath"`
-	RecordFormat          RecordFormat `json:"recordFormat"`
-	RecordPartDuration    Duration     `json:"recordPartDuration"`
-	RecordMaxPartSize     StringSize   `json:"recordMaxPartSize"`
-	RecordSegmentDuration Duration     `json:"recordSegmentDuration"`
-	RecordDeleteAfter     Duration     `json:"recordDeleteAfter"`
+	Record                bool                 `json:"record"`
+	Playback              *bool                `json:"playback,omitempty" deprecated:"true"`
+	RecordPath            string               `json:"recordPath"`
+	RecordFormat          RecordFormat         `json:"recordFormat"`
+	RecordPartDuration    Duration             `json:"recordPartDuration"`
+	RecordMaxPartSize     StringSize           `json:"recordMaxPartSize"`
+	RecordSegmentDuration Duration             `json:"recordSegmentDuration"`
+	RecordDeleteAfter     Duration             `json:"recordDeleteAfter"`
+	RecordWindow          string               `json:"recordWindow"`
+	RecordWindowParsed    *recordwindow.Window `json:"-"` // filled by Validate()
 
 	// Authentication (deprecated)
 	PublishUser *Credential `json:"publishUser,omitempty" deprecated:"true"`
@@ -871,6 +874,19 @@ func (pconf *Path) validate(
 
 	if pconf.Playback != nil {
 		l.Log(logger.Warn, "parameter 'playback' is deprecated and has no effect")
+	}
+
+	if strings.TrimSpace(pconf.RecordWindow) != "" {
+		window, err := recordwindow.Parse(pconf.RecordWindow)
+		if err != nil {
+			return err
+		}
+		pconf.RecordWindow = window.String()
+		pconf.RecordWindowParsed = window
+
+		if !pconf.Record {
+			l.Log(logger.Warn, "path '%s': 'recordWindow' has no effect because 'record' is disabled", name)
+		}
 	}
 
 	if !strings.Contains(pconf.RecordPath, "%path") {

@@ -43,9 +43,27 @@ pathDefaults:
   # Delete segments after this timespan.
   # Set to 0s to disable automatic deletion.
   recordDeleteAfter: 1d
+  # Daily UTC time window in which recording is allowed (HH:MM-HH:MM).
+  # An empty value records at any time. The window can cross midnight.
+  recordWindow: ""
 ```
 
 All available recording parameters are listed in the [configuration file](../6-references/1-configuration-file.md).
+
+## Daily recording window
+
+It is possible to record a path only during a fixed daily time interval, expressed in UTC, with the `recordWindow` parameter:
+
+```yml
+paths:
+  cam1:
+    record: yes
+    recordWindow: "22:00-06:00"
+```
+
+The interval is in the form `HH:MM-HH:MM` (seconds can be optionally specified with `HH:MM:SS-HH:MM:SS`) and can cross midnight: `22:00-06:00` means "from 22:00 UTC to 06:00 UTC of the following day". An empty string (the default) records around the clock.
+
+While a stream is online, recording starts and stops automatically at the window boundaries, without disconnecting or asking the publisher to reconnect. The segment being written is finalized when the window closes, and no new segment is created outside the window. Configuration changes are applied live. An invalid interval (malformed time, hour or minute out of range, or equal start and end) prevents the configuration from being loaded and produces a clear error message.
 
 ## Remote upload
 

@@ -594,6 +594,14 @@ pathDefaults:
   # Delete segments after this timespan.
   # Set to 0s to disable automatic deletion.
   recordDeleteAfter: 1d
+  # Daily time window in which recording is allowed, expressed in UTC and in
+  # the form HH:MM-HH:MM (seconds are optional, HH:MM:SS-HH:MM:SS is accepted).
+  # An empty string means recording is allowed at any time, according to "record".
+  # The window can cross midnight: "22:00-06:00" records from 22:00 UTC to 06:00
+  # UTC of the following day. Recording starts and stops automatically at the
+  # boundaries without disconnecting the publisher, and the segment being written
+  # is finalized when the window closes. This has no effect if "record" is "no".
+  recordWindow: ""
 
   ###############################################
   # Default path settings -> Publisher source (when source is "publisher")
