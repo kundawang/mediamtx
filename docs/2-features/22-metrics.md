@@ -158,13 +158,30 @@ moq_sessions_outbound_bytes{id="[id]",path="[path]",state="[state]"} 187
 # Forward destinations
 forward_dests{pos="[pos]",id="[id]",path="[path]",type="[type]",state="[state]"} 1
 forward_dests_outbound_bytes{pos="[pos]",id="[id]",path="[path]",type="[type]",state="[state]"} 1234
+
+# Static sources
+# Protocol statistics of static sources, keyed by path name. Values match the
+# /v3/paths/static-sources/get/<path> API. Series are only present while the
+# source is online; after a reconnect they reflect the new source and offline
+# sources leave no stale series. Labels never contain source URLs or credentials.
+rtsp_sources{name="[path_name]"} 1
+rtsp_sources_inbound_rtp_packets{name="[path_name]"} 123
+rtsp_sources_inbound_rtp_packets_lost{name="[path_name]"} 12
+rtsp_sources_inbound_rtp_packets_jitter{name="[path_name]"} 12.34
+srt_sources{name="[path_name]"} 1
+srt_sources_packets_received{name="[path_name]"} 12345
+srt_sources_packets_received_loss{name="[path_name]"} 12
+srt_sources_packets_retrans{name="[path_name]"} 3
+srt_sources_packets_received_retrans{name="[path_name]"} 3
 ```
+
+The full set of `rtsp_sources_*` and `srt_sources_*` metrics mirrors the corresponding `rtsp_sessions_*` inbound and `srt_conns_*` statistics.
 
 Bitrates are not provided directly as metrics because they can be computed from received and sent bytes by any metrics analyzer (for instance Grafana).
 
 Metrics can be filtered by using HTTP query parameters:
 
-- `type=[TYPE]`: show metrics of a certain type only. TYPE can be `paths`, `forward_dests`, `hls_sessions`, `hls_muxers`, `rtsp_conns`, `rtsp_sessions`, `rtsps_conns`, `rtsps_sessions`, `rtmp_conns`, `rtmps_conns`, `srt_conns`, `webrtc_sessions`, `moq_sessions`.
+- `type=[TYPE]`: show metrics of a certain type only. TYPE can be `paths`, `forward_dests`, `static_sources`, `hls_sessions`, `hls_muxers`, `rtsp_conns`, `rtsp_sessions`, `rtsp_sources`, `rtsps_conns`, `rtsps_sessions`, `rtmp_conns`, `rtmps_conns`, `srt_conns`, `srt_sources`, `webrtc_sessions`, `moq_sessions`. `static_sources` returns both `rtsp_sources` and `srt_sources`.
 - `path=[PATH]`: show metrics belonging to a specific path only
 - `hls_muxer=[PATH]`: show metrics belonging to a specific HLS muxer only
 - `hls_session=[ID]`: show metrics belonging to a specific HLS session only

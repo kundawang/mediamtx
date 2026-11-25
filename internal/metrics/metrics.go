@@ -75,15 +75,18 @@ type metricsType string
 const (
 	metricsTypePaths          metricsType = "paths"
 	metricsTypeForwardDests   metricsType = "forward_dests"
+	metricsTypeStaticSources  metricsType = "static_sources"
 	metricsTypeHLSSessions    metricsType = "hls_sessions"
 	metricsTypeHLSMuxers      metricsType = "hls_muxers"
 	metricsTypeRTSPConns      metricsType = "rtsp_conns"
 	metricsTypeRTSPSessions   metricsType = "rtsp_sessions"
+	metricsTypeRTSPSources    metricsType = "rtsp_sources"
 	metricsTypeRTSPSConns     metricsType = "rtsps_conns"
 	metricsTypeRTSPSSessions  metricsType = "rtsps_sessions"
 	metricsTypeRTMPConns      metricsType = "rtmp_conns"
 	metricsTypeRTMPSConns     metricsType = "rtmps_conns"
 	metricsTypeSRTConns       metricsType = "srt_conns"
+	metricsTypeSRTSources     metricsType = "srt_sources"
 	metricsTypeWebRTCSessions metricsType = "webrtc_sessions"
 	metricsTypeMoQSessions    metricsType = "moq_sessions"
 )
@@ -351,6 +354,8 @@ func (m *Metrics) onMetrics(ctx *gin.Context) {
 			out.WriteString("\n")
 		}
 	}
+
+	writeStaticSourcesMetrics(&out, typ, pathFilter, anyFilterActive, pathManager)
 
 	if (typ == "" || typ == metricsTypeForwardDests) &&
 		(!anyFilterActive || pathFilter != "" || forwardFilter != "") {
