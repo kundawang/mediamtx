@@ -130,6 +130,7 @@ type path struct {
 	confMutex                      sync.RWMutex
 	source                         defs.Source
 	stream                         *stream.Stream
+	bitrateLimiter                 *pathBitrateLimiter
 	recorder                       *recorder.Recorder
 	forwardManager                 *forward.Manager
 	availableTime                  time.Time
@@ -630,6 +631,8 @@ func (pa *path) doAddPublisher(req defs.PathAddPublisherReq) {
 	req.Author.Log(logger.Info, "is publishing to path '%s'",
 		pa.name)
 
+	pa.startBitrateLimiter(req.Author, pa.stream)
+
 	if pa.conf.AlwaysAvailable {
 		pa.setOnline(req.Author.APISourceDescribe(), req.AccessRequest.Query)
 	}
@@ -1004,6 +1007,8 @@ func (pa *path) consumeOnHoldRequests() {
 }
 
 func (pa *path) setNotAvailable() {
+	pa.stopBitrateLimiter()
+
 	pa.parent.setPathNotReady(pa)
 	pa.setOffline()
 
@@ -1077,6 +1082,8 @@ func (pa *path) executeRemoveReader(r defs.Reader) {
 }
 
 func (pa *path) executeRemovePublisher() {
+	pa.stopBitrateLimiter()
+
 	if !pa.conf.AlwaysAvailable {
 		pa.setNotAvailable()
 	} else {

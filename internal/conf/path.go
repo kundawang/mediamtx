@@ -225,9 +225,21 @@ type Path struct {
 	SourceOnDemandStartTimeout Duration `json:"sourceOnDemandStartTimeout"`
 	SourceOnDemandCloseAfter   Duration `json:"sourceOnDemandCloseAfter"`
 	MaxReaders                 int      `json:"maxReaders"`
-	SRTReadPassphrase          string   `json:"srtReadPassphrase"`
-	Fallback                   *string  `json:"fallback,omitempty" deprecated:"true"`
-	UseAbsoluteTimestamp       bool     `json:"useAbsoluteTimestamp"`
+
+	// Publisher inbound bitrate limit (sustained rate, sliding window).
+	// Zero means unlimited. maxInboundBitrate/maxPublishBitrate/maxBitrate
+	// are expressed in bits per second; maxInboundBytesPerSecond and
+	// maxPublishBytesPerSecond in bytes per second. When more than one is
+	// set, the most permissive one is used.
+	MaxInboundBitrate        int `json:"maxInboundBitrate"`
+	MaxPublishBitrate        int `json:"maxPublishBitrate"`
+	MaxBitrate               int `json:"maxBitrate"`
+	MaxInboundBytesPerSecond int `json:"maxInboundBytesPerSecond"`
+	MaxPublishBytesPerSecond int `json:"maxPublishBytesPerSecond"`
+
+	SRTReadPassphrase    string  `json:"srtReadPassphrase"`
+	Fallback             *string `json:"fallback,omitempty" deprecated:"true"`
+	UseAbsoluteTimestamp bool    `json:"useAbsoluteTimestamp"`
 
 	// Always available
 	AlwaysAvailable         bool                   `json:"alwaysAvailable"`
@@ -470,6 +482,11 @@ func (pconf *Path) validate(
 	}
 
 	// common configuration errors
+
+	if pconf.MaxInboundBitrate < 0 || pconf.MaxPublishBitrate < 0 || pconf.MaxBitrate < 0 ||
+		pconf.MaxInboundBytesPerSecond < 0 || pconf.MaxPublishBytesPerSecond < 0 {
+		return fmt.Errorf("bitrate limit parameters cannot be negative")
+	}
 
 	if pconf.SRTPublishPassphrase != "" && pconf.Source != "publisher" {
 		return fmt.Errorf("'srtPublishPassphase' can only be used when source is 'publisher'")
@@ -1027,4 +1044,35 @@ func (pconf Path) HasOnDemandStaticSource() bool {
 // HasOnDemandPublisher checks whether the path has a on-demand publisher.
 func (pconf Path) HasOnDemandPublisher() bool {
 	return pconf.RunOnDemand != ""
+}
+
+// MaxInboundBytesPerSec resolves the configured publisher inbound bitrate
+// limit into bytes per second. The boolean reports whether a limit is
+// configured. Bitrate parameters are expressed in bits per second and are
+// converted to bytes; explicit bytes-per-second parameters are used as-is.
+// When several aliases are set, the greatest value (the most permissive
+// limit) is returned, so a stray alias can never make the limit stricter.
+func (pconf Path) MaxInboundBytesPerSec() (int64, bool) {
+	var maxBytes int64
+
+	addBits := func(bits int) {
+		if bits > 0 {
+			if v := int64(bits) / 8; v > maxBytes {
+				maxBytes = v
+			}
+		}
+	}
+	addBytes := func(bytes int) {
+		if bytes > 0 && int64(bytes) > maxBytes {
+			maxBytes = int64(bytes)
+		}
+	}
+
+	addBits(pconf.MaxInboundBitrate)
+	addBits(pconf.MaxPublishBitrate)
+	addBits(pconf.MaxBitrate)
+	addBytes(pconf.MaxInboundBytesPerSecond)
+	addBytes(pconf.MaxPublishBytesPerSecond)
+
+	return maxBytes, maxBytes > 0
 }

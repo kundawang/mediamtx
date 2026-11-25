@@ -515,6 +515,18 @@ pathDefaults:
   sourceOnDemandCloseAfter: 10s
   # Maximum number of readers. Zero means no limit.
   maxReaders: 0
+  # Maximum sustained inbound bitrate of the publisher, in bits per second.
+  # The rate is computed from the actual received media bytes inside a finite
+  # sliding time window; short bursts within the window are allowed, while a
+  # publisher that sustainably exceeds the limit is terminated.
+  # Zero means no limit (default). This does not affect readers or outbound
+  # traffic and can be reloaded at runtime.
+  # Aliases maxPublishBitrate and maxBitrate are accepted too.
+  maxInboundBitrate: 0
+  # Same as maxInboundBitrate, but expressed in bytes per second.
+  # When both are set, the most permissive value is used.
+  # Alias maxPublishBytesPerSecond is accepted too.
+  maxInboundBytesPerSecond: 0
   # SRT encryption passphrase required to read from this path.
   srtReadPassphrase:
   # Use absolute timestamp of frames, instead of replacing them with the current time.

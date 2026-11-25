@@ -1049,6 +1049,22 @@ components:
           description: Forward
           items:
             $ref: "#/components/schemas/PathConfForwardDest"
+        maxBitrate:
+          type: integer
+          format: int64
+        maxInboundBitrate:
+          type: integer
+          format: int64
+          description: Publisher inbound bitrate limit (sustained rate, sliding window). Zero means unlimited. maxInboundBitrate/maxPublishBitrate/maxBitrate are expressed in bits per second; maxInboundBytesPerSecond and maxPublishBytesPerSecond in bytes per second. When more than one is set, the most permissive one is used.
+        maxInboundBytesPerSecond:
+          type: integer
+          format: int64
+        maxPublishBitrate:
+          type: integer
+          format: int64
+        maxPublishBytesPerSecond:
+          type: integer
+          format: int64
         maxReaders:
           type: integer
           format: int64
