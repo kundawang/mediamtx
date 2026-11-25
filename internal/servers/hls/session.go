@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/bluenviron/mediamtx/internal/auth"
+	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/hooks"
@@ -33,6 +34,7 @@ const (
 
 type sessionServer interface {
 	logger.Writer
+	automaticMuxerWanted(*conf.Path) bool
 	getOrCreateMuxer(string, *session, bool) (*muxer, error)
 	closeSession(*session)
 }
@@ -182,10 +184,12 @@ func (s *session) runInner2(errGroupCtx context.Context, errGroup *errgroup.Grou
 	s.expiresAt = res.AuthRes.ExpiresAt
 	s.userMutex.Unlock()
 
+	pathConf := res.Path.SafeConf()
+
 	muxer, err := s.server.getOrCreateMuxer(
 		s.pathName,
 		s,
-		res.Path.SafeConf().SourceOnDemand,
+		s.server.automaticMuxerWanted(pathConf),
 	)
 	if err != nil {
 		return err

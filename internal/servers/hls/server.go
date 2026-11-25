@@ -197,8 +197,26 @@ func (s *Server) Close() {
 	s.Log(logger.Debug, "closed")
 }
 
+// alwaysRemuxEnabled reports whether automatic, permanent HLS remuxing is
+// enabled for a path. A non-nil per-path hlsAlwaysRemux overrides the global
+// default; otherwise the global AlwaysRemux value is used.
+func (s *Server) alwaysRemuxEnabled(pconf *conf.Path) bool {
+	if pconf != nil && pconf.HLSAlwaysRemux != nil {
+		return *pconf.HLSAlwaysRemux
+	}
+	return s.AlwaysRemux
+}
+
+// automaticMuxerWanted reports whether the path must own an automatic muxer.
+// As with the global hlsAlwaysRemux, source-on-demand paths keep being
+// remuxed only on reader request, in order not to keep their source alive
+// permanently.
+func (s *Server) automaticMuxerWanted(pconf *conf.Path) bool {
+	return s.alwaysRemuxEnabled(pconf) && (pconf == nil || !pconf.SourceOnDemand)
+}
+
 func (s *Server) createAutomaticMuxerLocked(pa defs.Path) {
-	if s.AlwaysRemux && !pa.SafeConf().SourceOnDemand {
+	if s.automaticMuxerWanted(pa.SafeConf()) {
 		if _, ok := s.muxers[pa.Name()]; !ok {
 			s.createMuxerLocked(pa.Name(), nil)
 		}
@@ -234,7 +252,7 @@ func (s *Server) closeMuxer(mx *muxer) {
 	s.muxersMutex.Unlock()
 }
 
-func (s *Server) getOrCreateMuxer(pathName string, author *session, sourceOnDemand bool) (*muxer, error) {
+func (s *Server) getOrCreateMuxer(pathName string, author *session, automatic bool) (*muxer, error) {
 	s.muxersMutex.Lock()
 	defer s.muxersMutex.Unlock()
 
@@ -245,8 +263,11 @@ func (s *Server) getOrCreateMuxer(pathName string, author *session, sourceOnDema
 	mux, ok := s.muxers[pathName]
 	switch {
 	case ok:
+		if automatic {
+			mux.makeAutomatic()
+		}
 		return mux, nil
-	case s.AlwaysRemux && !sourceOnDemand:
+	case automatic:
 		return nil, fmt.Errorf("muxer is waiting to be created")
 	default:
 		return s.createMuxerLocked(pathName, author), nil
@@ -291,7 +312,7 @@ func (s *Server) PathNotReady(pa defs.Path) {
 	}
 
 	mx, ok := s.muxers[pa.Name()]
-	if ok && mx.author == nil {
+	if ok && mx.isAutomatic() {
 		delete(s.muxers, pa.Name())
 	} else {
 		mx = nil
@@ -300,6 +321,44 @@ func (s *Server) PathNotReady(pa defs.Path) {
 
 	if mx != nil {
 		mx.Close()
+	}
+}
+
+// PathConfReloaded is called by pathManager after the configuration of ready
+// paths has been reloaded. It creates or destroys automatic muxers in order
+// to apply per-path hlsAlwaysRemux changes without restarting the HLS server.
+// An existing reader-requested muxer is promoted to permanent when remux gets
+// enabled.
+func (s *Server) PathConfReloaded(pa defs.Path, pconf *conf.Path) {
+	s.muxersMutex.Lock()
+
+	if s.closed.Load() {
+		s.muxersMutex.Unlock()
+		return
+	}
+
+	name := pa.Name()
+	mx, ok := s.muxers[name]
+	wanted := s.automaticMuxerWanted(pconf)
+
+	var toClose *muxer
+
+	switch {
+	case wanted && !ok:
+		s.createMuxerLocked(name, nil)
+
+	case wanted && ok:
+		mx.makeAutomatic()
+
+	case !wanted && ok && mx.isAutomatic():
+		delete(s.muxers, name)
+		toClose = mx
+	}
+
+	s.muxersMutex.Unlock()
+
+	if toClose != nil {
+		toClose.Close()
 	}
 }
 

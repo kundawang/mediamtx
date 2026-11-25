@@ -26,6 +26,8 @@ func pathConfCanBeUpdated(oldPathConf *conf.Path, newPathConf *conf.Path) bool {
 	clone.Regexp = newPathConf.Regexp
 	clone.Forward = newPathConf.Forward
 
+	clone.HLSAlwaysRemux = newPathConf.HLSAlwaysRemux
+
 	clone.Record = newPathConf.Record
 	clone.RecordPath = newPathConf.RecordPath
 	clone.RecordFormat = newPathConf.RecordFormat
@@ -291,6 +293,17 @@ func (pm *pathManager) doReloadConf(newPaths map[string]*conf.Path) {
 		if pathConf.Regexp == nil {
 			if _, ok := pm.paths[pathConfName]; !ok {
 				pm.createPath(pathConf, pathConfName, nil)
+			}
+		}
+	}
+
+	// reconcile automatic HLS muxers according to the new path configurations
+	if pm.hlsServer != nil {
+		for _, pa := range pm.paths {
+			if pa.ready {
+				if newPathConf, _, err := conf.FindPathConf(newPaths, pa.name); err == nil {
+					pm.hlsServer.PathConfReloaded(pa, newPathConf)
+				}
 			}
 		}
 	}

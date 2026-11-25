@@ -1057,6 +1057,10 @@ components:
           description: Forward
           items:
             $ref: "#/components/schemas/PathConfForwardDest"
+        hlsAlwaysRemux:
+          type: boolean
+          nullable: true
+          description: Override the global hlsAlwaysRemux for this path. Null or unset inherits the global value.
         maxReaders:
           type: integer
           format: int64

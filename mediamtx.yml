@@ -520,6 +520,13 @@ pathDefaults:
   # Use absolute timestamp of frames, instead of replacing them with the current time.
   useAbsoluteTimestamp: false
 
+  # Override the global "hlsAlwaysRemux" option for this path only.
+  # When this is not set, the global "hlsAlwaysRemux" value is used.
+  # * true: an HLS muxer is always running as soon as the path is ready,
+  #   keeping a segment window ready for the first reader.
+  # * false: the HLS muxer is created only when a reader requests it.
+  # hlsAlwaysRemux: true
+
   ###############################################
   # Default path settings -> Always available
 

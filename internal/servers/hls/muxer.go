@@ -48,6 +48,7 @@ type muxer struct {
 	ctxCancel       func()
 	created         time.Time
 	path            defs.Path
+	automatic       atomic.Bool
 	lastRequestTime atomic.Int64
 	bytesSent       atomic.Uint64
 
@@ -64,6 +65,7 @@ func (m *muxer) initialize() {
 	m.ctx = ctx
 	m.ctxCancel = ctxCancel
 	m.created = time.Now()
+	m.automatic.Store(m.author == nil)
 	m.lastRequestTime.Store(time.Now().UnixNano())
 	m.chCloseInstance = make(chan muxerCloseInstanceReq)
 
@@ -93,6 +95,18 @@ func (m *muxer) Log(level logger.Level, format string, args ...any) {
 // PathName returns the path name.
 func (m *muxer) PathName() string {
 	return m.pathName
+}
+
+// isAutomatic reports whether the muxer is permanent (created because
+// always-remux is enabled for the path), rather than requested by a reader.
+func (m *muxer) isAutomatic() bool {
+	return m.automatic.Load()
+}
+
+// makeAutomatic turns a reader-requested muxer into a permanent one.
+// It is used when always-remux gets enabled for the path at runtime.
+func (m *muxer) makeAutomatic() {
+	m.automatic.Store(true)
 }
 
 func (m *muxer) run() {
@@ -140,7 +154,7 @@ func (m *muxer) runInner() error {
 
 	tmp, err := m.createInstance(res.Stream)
 	if err != nil {
-		if m.author != nil || errors.Is(err, hls.ErrNoSupportedCodecs) {
+		if !m.isAutomatic() || errors.Is(err, hls.ErrNoSupportedCodecs) {
 			m.mutex.Unlock()
 			return err
 		}
@@ -186,7 +200,7 @@ func (m *muxer) runInner() error {
 			m.instance = nil
 			m.mutex.Unlock()
 
-			if m.author != nil {
+			if !m.isAutomatic() {
 				return req.err
 			} else {
 				m.Log(logger.Error, "muxer instance crashed: %v", req.err)
@@ -207,10 +221,15 @@ func (m *muxer) runInner() error {
 			m.mutex.Unlock()
 
 		case <-activityCheckTimer.C:
-			if time.Since(time.Unix(0, m.lastRequestTime.Load())) >= time.Duration(m.closeAfter) {
+			// A muxer that became automatic at runtime must never close due
+			// to inactivity: disarm the periodic check permanently.
+			if m.isAutomatic() {
+				activityCheckTimer = emptyTimer()
+			} else if time.Since(time.Unix(0, m.lastRequestTime.Load())) >= time.Duration(m.closeAfter) {
 				return fmt.Errorf("not used anymore")
+			} else {
+				activityCheckTimer = time.NewTimer(max(time.Duration(m.closeAfter)/3, 1*time.Second))
 			}
-			activityCheckTimer = time.NewTimer(max(time.Duration(m.closeAfter)/3, 1*time.Second))
 
 		case <-m.ctx.Done():
 			return errors.New("terminated")

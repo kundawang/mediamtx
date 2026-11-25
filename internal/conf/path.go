@@ -229,6 +229,10 @@ type Path struct {
 	Fallback                   *string  `json:"fallback,omitempty" deprecated:"true"`
 	UseAbsoluteTimestamp       bool     `json:"useAbsoluteTimestamp"`
 
+	// HLS
+	// When nil, the global hlsAlwaysRemux value is used.
+	HLSAlwaysRemux *bool `json:"hlsAlwaysRemux,omitempty"`
+
 	// Always available
 	AlwaysAvailable         bool                   `json:"alwaysAvailable"`
 	AlwaysAvailableTracks   []AlwaysAvailableTrack `json:"alwaysAvailableTracks"`
