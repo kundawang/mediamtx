@@ -103,7 +103,7 @@ func seekAndMux(
 		return nil
 	}
 
-	return fmt.Errorf("MPEG-TS format is not supported yet")
+	return seekAndMuxMPEGTS(segments, start, duration, m)
 }
 
 type writerWrapper struct {

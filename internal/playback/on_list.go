@@ -17,7 +17,11 @@ import (
 	"github.com/bluenviron/mediamtx/internal/recordstore"
 )
 
-func parseSegment(seg *recordstore.Segment) (*parsedSegment, error) {
+func parseSegment(seg *recordstore.Segment, recordFormat conf.RecordFormat) (*parsedSegment, error) {
+	if recordFormat == conf.RecordFormatMPEGTS {
+		return parseMPEGTSSegment(seg)
+	}
+
 	init, duration, err := recordstore.SegmentFMP4ReadHeaderAndDuration(seg.Fpath)
 	if err != nil {
 		return nil, err
@@ -30,7 +34,7 @@ func parseSegment(seg *recordstore.Segment) (*parsedSegment, error) {
 	}, nil
 }
 
-func parseSegments(segments []*recordstore.Segment) ([]*parsedSegment, error) {
+func parseSegments(segments []*recordstore.Segment, recordFormat conf.RecordFormat) ([]*parsedSegment, error) {
 	parsed := make([]*parsedSegment, len(segments))
 	ch := make(chan error)
 
@@ -40,7 +44,7 @@ func parseSegments(segments []*recordstore.Segment) ([]*parsedSegment, error) {
 	for i, seg := range segments {
 		go func(i int, seg *recordstore.Segment) {
 			var err error
-			parsed[i], err = parseSegment(seg)
+			parsed[i], err = parseSegment(seg, recordFormat)
 			ch <- err
 		}(i, seg)
 	}
@@ -72,12 +76,29 @@ func urlScheme(ctx *gin.Context, trustedProxies conf.IPNetworks, encryption bool
 	return "http"
 }
 
-func concatenateSegments(parsed []*parsedSegment) []listEntry {
+func canBeConcatenated(
+	recordFormat conf.RecordFormat,
+	prevInit *fmp4.Init,
+	prevEnd time.Time,
+	curInit *fmp4.Init,
+	curStart time.Time,
+) bool {
+	if recordFormat == conf.RecordFormatMPEGTS {
+		return mpegtsCanBeConcatenated(prevInit, prevEnd, curInit, curStart)
+	}
+	return segmentFMP4CanBeConcatenated(prevInit, prevEnd, curInit, curStart)
+}
+
+func concatenateSegments(
+	recordFormat conf.RecordFormat,
+	parsed []*parsedSegment,
+) []listEntry {
 	out := []listEntry{}
 	var prevInit *fmp4.Init
 
 	for _, parsed := range parsed {
-		if len(out) != 0 && segmentFMP4CanBeConcatenated(
+		if len(out) != 0 && canBeConcatenated(
+			recordFormat,
 			prevInit,
 			out[len(out)-1].Start.Add(time.Duration(out[len(out)-1].Duration)),
 			parsed.init,
@@ -102,17 +123,13 @@ func parseAndConcatenate(
 	recordFormat conf.RecordFormat,
 	segments []*recordstore.Segment,
 ) ([]listEntry, error) {
-	if recordFormat == conf.RecordFormatFMP4 {
-		parsed, err := parseSegments(segments)
-		if err != nil {
-			return nil, err
-		}
-
-		out := concatenateSegments(parsed)
-		return out, nil
+	parsed, err := parseSegments(segments, recordFormat)
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("MPEG-TS format is not supported yet")
+	out := concatenateSegments(recordFormat, parsed)
+	return out, nil
 }
 
 type listEntryDuration time.Duration
