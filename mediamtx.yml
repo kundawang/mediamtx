@@ -734,6 +734,15 @@ pathDefaults:
   runOnInit:
   # Restart the command if it exits.
   runOnInitRestart: false
+  # Restart the command if the path is not ready after this amount of time,
+  # even if the command is still alive. This is useful when the command hangs
+  # while pulling a remote stream and never publishes.
+  # It requires runOnInitRestart to be enabled.
+  # The countdown starts when the command is running and the path is not
+  # ready, is canceled as soon as the path becomes ready, and starts again
+  # when the path becomes not ready.
+  # 0 disables the feature.
+  runOnInitRestartAfterNotReady: 0s
 
   # Command to run when this path is requested by a reader
   # and no one is publishing to this path yet.

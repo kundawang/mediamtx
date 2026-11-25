@@ -334,24 +334,25 @@ type Path struct {
 	RPICameraSecondaryMJPEGQuality uint      `json:"-"` // filled by Validate()
 
 	// Hooks
-	RunOnInit                  string   `json:"runOnInit"`
-	RunOnInitRestart           bool     `json:"runOnInitRestart"`
-	RunOnDemand                string   `json:"runOnDemand"`
-	RunOnDemandRestart         bool     `json:"runOnDemandRestart"`
-	RunOnDemandStartTimeout    Duration `json:"runOnDemandStartTimeout"`
-	RunOnDemandCloseAfter      Duration `json:"runOnDemandCloseAfter"`
-	RunOnUnDemand              string   `json:"runOnUnDemand"`
-	RunOnReady                 string   `json:"runOnReady"`
-	RunOnReadyRestart          bool     `json:"runOnReadyRestart"`
-	RunOnNotReady              string   `json:"runOnNotReady"`
-	RunOnOnline                string   `json:"runOnOnline"`
-	RunOnOnlineRestart         bool     `json:"runOnOnlineRestart"`
-	RunOnOffline               string   `json:"runOnOffline"`
-	RunOnRead                  string   `json:"runOnRead"`
-	RunOnReadRestart           bool     `json:"runOnReadRestart"`
-	RunOnUnread                string   `json:"runOnUnread"`
-	RunOnRecordSegmentCreate   string   `json:"runOnRecordSegmentCreate"`
-	RunOnRecordSegmentComplete string   `json:"runOnRecordSegmentComplete"`
+	RunOnInit                     string   `json:"runOnInit"`
+	RunOnInitRestart              bool     `json:"runOnInitRestart"`
+	RunOnInitRestartAfterNotReady Duration `json:"runOnInitRestartAfterNotReady"`
+	RunOnDemand                   string   `json:"runOnDemand"`
+	RunOnDemandRestart            bool     `json:"runOnDemandRestart"`
+	RunOnDemandStartTimeout       Duration `json:"runOnDemandStartTimeout"`
+	RunOnDemandCloseAfter         Duration `json:"runOnDemandCloseAfter"`
+	RunOnUnDemand                 string   `json:"runOnUnDemand"`
+	RunOnReady                    string   `json:"runOnReady"`
+	RunOnReadyRestart             bool     `json:"runOnReadyRestart"`
+	RunOnNotReady                 string   `json:"runOnNotReady"`
+	RunOnOnline                   string   `json:"runOnOnline"`
+	RunOnOnlineRestart            bool     `json:"runOnOnlineRestart"`
+	RunOnOffline                  string   `json:"runOnOffline"`
+	RunOnRead                     string   `json:"runOnRead"`
+	RunOnReadRestart              bool     `json:"runOnReadRestart"`
+	RunOnUnread                   string   `json:"runOnUnread"`
+	RunOnRecordSegmentCreate      string   `json:"runOnRecordSegmentCreate"`
+	RunOnRecordSegmentComplete    string   `json:"runOnRecordSegmentComplete"`
 }
 
 func (pconf *Path) setDefaults() {
@@ -928,6 +929,15 @@ func (pconf *Path) validate(
 	if pconf.RunOnInit != "" && pconf.Regexp != nil {
 		return fmt.Errorf("a path with a regular expression (or path 'all_others')" +
 			" does not support option 'runOnInit'; use another path")
+	}
+
+	if pconf.RunOnInitRestartAfterNotReady < 0 {
+		return fmt.Errorf("'runOnInitRestartAfterNotReady' must be greater than or equal to zero")
+	}
+
+	if pconf.RunOnInitRestartAfterNotReady > 0 && !pconf.RunOnInitRestart {
+		l.Log(logger.Warn, "parameter 'runOnInitRestartAfterNotReady' is ignored"+
+			" when 'runOnInitRestart' is disabled")
 	}
 
 	if (pconf.RunOnDemand != "" || pconf.RunOnUnDemand != "") && pconf.Source != "publisher" {

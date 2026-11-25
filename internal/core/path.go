@@ -100,6 +100,9 @@ type path struct {
 	onUnDemandHook                 func(string)
 	onNotReadyHook                 func()
 	onOfflineHook                  func()
+	onInitHook                     *hooks.OnInitHandle
+	onInitNotReadyTimer            *time.Timer
+	onInitWatchdogActive           bool
 	readers                        map[defs.Reader]struct{}
 	describeRequestsOnHold         []defs.PathDescribeReq
 	readerAddRequestsOnHold        []defs.PathAddReaderReq
@@ -119,6 +122,7 @@ type path struct {
 	chRemovePublisher         chan defs.PathRemovePublisherReq
 	chAddReader               chan defs.PathAddReaderReq
 	chRemoveReader            chan defs.PathRemoveReaderReq
+	chOnInitState             chan struct{}
 	chAPIPathsGet             chan pathAPIPathsGetReq
 
 	// out
@@ -136,6 +140,7 @@ func (pa *path) initialize() {
 	pa.onDemandStaticSourceCloseTimer = emptyTimer()
 	pa.onDemandPublisherReadyTimer = emptyTimer()
 	pa.onDemandPublisherCloseTimer = emptyTimer()
+	pa.onInitNotReadyTimer = emptyTimer()
 	pa.chReloadConf = make(chan *conf.Path)
 	pa.chStaticSourceSetReady = make(chan defs.PathSourceStaticSetReadyReq)
 	pa.chStaticSourceSetNotReady = make(chan defs.PathSourceStaticSetNotReadyReq)
@@ -144,6 +149,7 @@ func (pa *path) initialize() {
 	pa.chRemovePublisher = make(chan defs.PathRemovePublisherReq)
 	pa.chAddReader = make(chan defs.PathAddReaderReq)
 	pa.chRemoveReader = make(chan defs.PathRemoveReaderReq)
+	pa.chOnInitState = make(chan struct{}, 1)
 	pa.chAPIPathsGet = make(chan pathAPIPathsGetReq)
 	pa.done = make(chan struct{})
 
@@ -212,12 +218,21 @@ func (pa *path) run() {
 		}
 	}
 
-	onUnInitHook := hooks.OnInit(hooks.OnInitParams{
+	pa.onInitHook = hooks.OnInit(hooks.OnInitParams{
 		Logger:          pa,
 		ExternalCmdPool: pa.externalCmdPool,
 		Conf:            pa.conf,
 		ExternalCmdEnv:  pa.ExternalCmdEnv(),
+		OnStateChange: func() {
+			// called by the external command goroutine: coalesce state
+			// changes and let the path goroutine re-evaluate the watchdog.
+			select {
+			case pa.chOnInitState <- struct{}{}:
+			default:
+			}
+		},
 	})
+	pa.updateOnInitWatchdog()
 
 	err := pa.runInner()
 
@@ -231,7 +246,12 @@ func (pa *path) run() {
 	pa.onDemandPublisherReadyTimer.Stop()
 	pa.onDemandPublisherCloseTimer.Stop()
 
-	onUnInitHook()
+	pa.onInitWatchdogActive = false
+	pa.onInitNotReadyTimer.Stop()
+
+	if pa.onInitHook != nil {
+		pa.onInitHook.Close()
+	}
 
 	for _, req := range pa.describeRequestsOnHold {
 		req.Res <- defs.PathDescribeRes{Err: fmt.Errorf("terminated")}
@@ -288,6 +308,12 @@ func (pa *path) runInner() error {
 
 		case <-pa.onDemandPublisherCloseTimer.C:
 			pa.doOnDemandPublisherCloseTimer()
+
+		case <-pa.onInitNotReadyTimer.C:
+			pa.doOnInitNotReadyTimer()
+
+		case <-pa.chOnInitState:
+			pa.updateOnInitWatchdog()
 
 		case newConf := <-pa.chReloadConf:
 			pa.doReloadConf(newConf)
@@ -394,6 +420,16 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 	pa.conf = newConf
 	pa.confMutex.Unlock()
 
+	// if the grace period changed while the countdown is running, drop the
+	// current countdown: updateOnInitWatchdog() starts a fresh one with the
+	// new value. The command itself is not restarted by a configuration reload.
+	if newConf.RunOnInitRestartAfterNotReady != oldConf.RunOnInitRestartAfterNotReady &&
+		pa.onInitWatchdogActive {
+		pa.onInitWatchdogActive = false
+		pa.onInitNotReadyTimer.Stop()
+		pa.onInitNotReadyTimer = emptyTimer()
+	}
+
 	if pa.conf.HasStaticSource() {
 		pa.source.(*staticsources.Handler).ReloadConf(newConf)
 	}
@@ -413,6 +449,58 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 	if newConf.Record && pa.stream != nil && pa.recorder == nil {
 		pa.startRecording()
 	}
+
+	pa.updateOnInitWatchdog()
+}
+
+// onInitWatchdogShouldRun reports whether the runOnInit command is alive while
+// the path is not ready and the grace period is enabled.
+func (pa *path) onInitWatchdogShouldRun() bool {
+	return pa.onInitHook != nil &&
+		pa.conf.RunOnInitRestart &&
+		pa.conf.RunOnInitRestartAfterNotReady > 0 &&
+		pa.onInitHook.Running() &&
+		!pa.isAvailable()
+}
+
+// updateOnInitWatchdog starts, cancels or leaves unchanged the countdown that
+// terminates a stuck runOnInit command. It must be called from the path
+// goroutine, whenever the command state, the path readiness or the
+// configuration changes.
+func (pa *path) updateOnInitWatchdog() {
+	if pa.onInitWatchdogShouldRun() {
+		if !pa.onInitWatchdogActive {
+			timeout := time.Duration(pa.conf.RunOnInitRestartAfterNotReady)
+			pa.onInitWatchdogActive = true
+			pa.onInitNotReadyTimer.Stop()
+			pa.onInitNotReadyTimer = time.NewTimer(timeout)
+			pa.Log(logger.Info, "runOnInit command did not make the path ready yet,"+
+				" it will be restarted in %s if the path stays not ready", timeout)
+		}
+	} else if pa.onInitWatchdogActive {
+		pa.onInitWatchdogActive = false
+		pa.onInitNotReadyTimer.Stop()
+		pa.onInitNotReadyTimer = emptyTimer()
+	}
+}
+
+// doOnInitNotReadyTimer terminates a runOnInit command that has outlived the
+// grace period without making the path ready. Terminate() routes it through
+// the existing runOnInitRestart mechanism.
+func (pa *path) doOnInitNotReadyTimer() {
+	pa.onInitWatchdogActive = false
+	pa.onInitNotReadyTimer = emptyTimer()
+
+	if !pa.onInitWatchdogShouldRun() {
+		// the state changed while the timer was firing
+		return
+	}
+
+	timeout := time.Duration(pa.conf.RunOnInitRestartAfterNotReady)
+	pa.Log(logger.Info, "runOnInit command did not make the path ready within %s,"+
+		" restarting it because the path is not ready", timeout)
+
+	pa.onInitHook.Terminate()
 }
 
 func (pa *path) doSourceStaticSetReady(req defs.PathSourceStaticSetReadyReq) {
@@ -902,6 +990,8 @@ func (pa *path) setAvailable(
 
 	pa.parent.setPathReady(pa)
 
+	pa.updateOnInitWatchdog()
+
 	return nil
 }
 
@@ -939,6 +1029,8 @@ func (pa *path) setNotAvailable() {
 		pa.stream.Close()
 		pa.stream = nil
 	}
+
+	pa.updateOnInitWatchdog()
 }
 
 func (pa *path) startRecording() {

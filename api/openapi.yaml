@@ -1137,6 +1137,8 @@ components:
           description: Hooks
         runOnInitRestart:
           type: boolean
+        runOnInitRestartAfterNotReady:
+          type: string
         runOnNotReady:
           type: string
         runOnOffline:

@@ -12,7 +12,7 @@ import (
 	"github.com/kballard/go-shellquote"
 )
 
-func (c *Cmd) runOSSpecific(cmdstr string, env []string) error {
+func (c *Cmd) runOSSpecific(cmdstr string, env []string, restart chan struct{}) error {
 	cmdParts, err := shellquote.Split(cmdstr)
 	if err != nil {
 		return err
@@ -56,6 +56,12 @@ func (c *Cmd) runOSSpecific(cmdstr string, env []string) error {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) //nolint:errcheck
 		<-cmdDone
 		return errTerminated
+
+	case <-restart:
+		// terminate the current process and let the restart loop start it again
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) //nolint:errcheck
+		<-cmdDone
+		return errRestartRequested
 
 	case c := <-cmdDone:
 		if c != 0 {

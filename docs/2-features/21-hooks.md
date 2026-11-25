@@ -46,7 +46,14 @@ paths:
     runOnInit: ffmpeg -i my_file.mp4 -c copy -f rtsp rtsp://localhost:8554/mypath
     # Restart the command if it exits.
     runOnInitRestart: no
+    # Restart the command if the path is not ready after this amount of time,
+    # even if the command is still alive. It requires runOnInitRestart.
+    # The countdown is canceled when the path becomes ready and starts again
+    # when the path becomes not ready. 0 disables the feature.
+    runOnInitRestartAfterNotReady: 0s
 ```
+
+`runOnInitRestartAfterNotReady` is meant for pull commands (for instance FFmpeg pulling a remote camera) that can stay alive while the upstream connection is stuck and no publisher reaches the path. When the command is alive and the path is not ready for the whole interval, mediamtx terminates the command and lets the usual `runOnInitRestart` machinery launch it again after the standard restart pause. As soon as the path becomes ready, the countdown is canceled; if the path later becomes not ready, the countdown starts over. Every automatic termination is written to the server log. Set it to `0s` (the default) to preserve the previous behavior.
 
 ## runOnDemand
 

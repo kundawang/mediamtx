@@ -59,7 +59,7 @@ func addProcessToGroup(h windows.Handle, p *os.Process) error {
 	return nil
 }
 
-func (c *Cmd) runOSSpecific(cmdstr string, env []string) error {
+func (c *Cmd) runOSSpecific(cmdstr string, env []string, restart chan struct{}) error {
 	var cmd *exec.Cmd
 
 	// from Golang documentation:
@@ -130,6 +130,12 @@ func (c *Cmd) runOSSpecific(cmdstr string, env []string) error {
 		closeProcessGroup(g)
 		<-cmdDone
 		return errTerminated
+
+	case <-restart:
+		// terminate the current process and let the restart loop start it again
+		closeProcessGroup(g)
+		<-cmdDone
+		return errRestartRequested
 
 	case code := <-cmdDone:
 		closeProcessGroup(g)
