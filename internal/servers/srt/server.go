@@ -78,20 +78,21 @@ type serverParent interface {
 
 // Server is a SRT server.
 type Server struct {
-	Address             string
-	RTSPAddress         string
-	ReadTimeout         conf.Duration
-	WriteTimeout        conf.Duration
-	UDPMaxPayloadSize   int
-	UDPReadBufferSize   uint
-	UDPWriteBufferSize  uint
-	RunOnConnect        string
-	RunOnConnectRestart bool
-	RunOnDisconnect     string
-	ExternalCmdPool     *externalcmd.Pool
-	Metrics             serverMetrics
-	PathManager         serverPathManager
-	Parent              serverParent
+	Address               string
+	RTSPAddress           string
+	ReadTimeout           conf.Duration
+	WriteTimeout          conf.Duration
+	UDPMaxPayloadSize     int
+	UDPReadBufferSize     uint
+	UDPWriteBufferSize    uint
+	MPEGTSAnalyzeDuration conf.Duration
+	RunOnConnect          string
+	RunOnConnectRestart   bool
+	RunOnDisconnect       string
+	ExternalCmdPool       *externalcmd.Pool
+	Metrics               serverMetrics
+	PathManager           serverPathManager
+	Parent                serverParent
 
 	ctx       context.Context
 	ctxCancel func()
@@ -202,6 +203,7 @@ outer:
 				readTimeout:         s.ReadTimeout,
 				writeTimeout:        s.WriteTimeout,
 				udpMaxPayloadSize:   s.UDPMaxPayloadSize,
+				analyzeDuration:     s.MPEGTSAnalyzeDuration,
 				connReq:             req,
 				runOnConnect:        s.RunOnConnect,
 				runOnConnectRestart: s.RunOnConnectRestart,

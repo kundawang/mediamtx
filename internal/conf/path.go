@@ -275,6 +275,11 @@ type Path struct {
 
 	// MPEG-TS source
 	MPEGTSUDPReadBufferSize *uint `json:"mpegtsUDPReadBufferSize,omitempty" deprecated:"true"`
+	// Maximum time spent analyzing the beginning of an incoming MPEG-TS or
+	// SRT/MPEG-TS stream before publishing it. This allows skipping corrupted
+	// leading packets and detecting every track (e.g. audio declared by a late
+	// PMT). Zero keeps the legacy startup latency and behavior.
+	MPEGTSAnalyzeDuration Duration `json:"mpegtsAnalyzeDuration"`
 
 	// RTP source
 	RTPSDP               string `json:"rtpSDP"`
@@ -819,6 +824,10 @@ func (pconf *Path) validate(
 		if err != nil {
 			return fmt.Errorf("invalid 'readRTPassphrase': %w", err)
 		}
+	}
+
+	if pconf.MPEGTSAnalyzeDuration < 0 {
+		return fmt.Errorf("'mpegtsAnalyzeDuration' must be greater than or equal to zero")
 	}
 
 	err := pconf.Forward.Validate()

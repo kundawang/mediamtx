@@ -498,6 +498,9 @@ components:
           type: array
           items:
             type: string
+        mpegtsAnalyzeDuration:
+          type: string
+          description: MPEG-TS / SRT input analysis. This is the global default of the identically named path parameter; the path-level value takes precedence.
         multicastIPRange:
           type: string
         multicastRTCPPort:
@@ -1069,6 +1072,9 @@ components:
         moqTransport:
           type: string
           description: MoQ source
+        mpegtsAnalyzeDuration:
+          type: string
+          description: Maximum time spent analyzing the beginning of an incoming MPEG-TS or SRT/MPEG-TS stream before publishing it. This allows skipping corrupted leading packets and detecting every track (e.g. audio declared by a late PMT). Zero keeps the legacy startup latency and behavior.
         mpegtsUDPReadBufferSize:
           type: integer
           format: uint64

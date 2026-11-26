@@ -612,6 +612,16 @@ pathDefaults:
   # exposed as native tracks.
   # This allows HLS, WebRTC, and other outputs to work transparently with MPEG-TS sources.
   rtspDemuxMpegts: false
+  # Maximum time spent analyzing the beginning of an MPEG-TS or SRT/MPEG-TS stream
+  # before publishing it. Cellular or damaged links may contain corrupted packets
+  # or an incomplete PMT during the first seconds, causing MediaMTX to detect only
+  # some tracks (for instance H265) and discard later tracks (for instance AAC) as
+  # undeclared PIDs. When this is greater than zero, leading corrupted packets are
+  # skipped and the most complete track set seen within the window is published.
+  # The window is finite, the buffered amount is bounded, and expiry, video-only
+  # streams, persistent corruption and source disconnection all terminate with a
+  # definite result. Zero keeps the original startup latency and behavior.
+  mpegtsAnalyzeDuration: 0s
 
   ###############################################
   # Default path settings -> RTSP source (when source is a RTSP or a RTSPS URL)

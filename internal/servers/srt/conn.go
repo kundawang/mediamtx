@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
-	mcmpegts "github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts"
 	srt "github.com/datarhei/gosrt"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -49,6 +48,7 @@ type conn struct {
 	readTimeout         conf.Duration
 	writeTimeout        conf.Duration
 	udpMaxPayloadSize   int
+	analyzeDuration     conf.Duration
 	connReq             srt.ConnRequest
 	runOnConnect        string
 	runOnConnectRestart bool
@@ -217,11 +217,25 @@ func (c *conn) runPublish(errGroupCtx context.Context, errGroup *errgroup.Group,
 	})
 
 	sconn.SetReadDeadline(time.Now().Add(time.Duration(c.readTimeout)))
-	r := &mcmpegts.Reader{R: sconn}
-	err = r.Initialize()
+
+	analyzeDuration := c.analyzeDuration
+	if res1.Conf != nil && res1.Conf.MPEGTSAnalyzeDuration > 0 {
+		analyzeDuration = res1.Conf.MPEGTSAnalyzeDuration
+	}
+
+	if analyzeDuration > 0 {
+		c.Log(logger.Info, "analyzing MPEG-TS tracks for %s before publishing", time.Duration(analyzeDuration))
+	}
+
+	r, stopAnalysis, err := mpegts.AnalyzeReader(sconn, mpegts.StartupAnalysis{
+		Duration:    time.Duration(analyzeDuration),
+		ReadTimeout: time.Duration(c.readTimeout),
+		Log:         c,
+	})
 	if err != nil {
 		return err
 	}
+	defer stopAnalysis()
 
 	decodeErrors := &errordumper.Dumper{
 		OnReport: func(val uint64, last error) {

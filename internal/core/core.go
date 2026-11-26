@@ -961,20 +961,21 @@ func (p *Core) createResources(initial bool) error {
 	if p.conf.SRT &&
 		p.srtServer == nil {
 		i := &srt.Server{
-			Address:             p.conf.SRTAddress,
-			RTSPAddress:         p.conf.RTSPAddress,
-			ReadTimeout:         p.conf.ReadTimeout,
-			WriteTimeout:        p.conf.WriteTimeout,
-			UDPMaxPayloadSize:   p.conf.UDPMaxPayloadSize,
-			UDPReadBufferSize:   p.conf.UDPReadBufferSize,
-			UDPWriteBufferSize:  p.conf.UDPWriteBufferSize,
-			RunOnConnect:        p.conf.RunOnConnect,
-			RunOnConnectRestart: p.conf.RunOnConnectRestart,
-			RunOnDisconnect:     p.conf.RunOnDisconnect,
-			ExternalCmdPool:     p.externalCmdPool,
-			Metrics:             p.metrics,
-			PathManager:         p.pathManager,
-			Parent:              p,
+			Address:               p.conf.SRTAddress,
+			RTSPAddress:           p.conf.RTSPAddress,
+			ReadTimeout:           p.conf.ReadTimeout,
+			WriteTimeout:          p.conf.WriteTimeout,
+			UDPMaxPayloadSize:     p.conf.UDPMaxPayloadSize,
+			UDPReadBufferSize:     p.conf.UDPReadBufferSize,
+			UDPWriteBufferSize:    p.conf.UDPWriteBufferSize,
+			MPEGTSAnalyzeDuration: p.conf.MPEGTSAnalyzeDuration,
+			RunOnConnect:          p.conf.RunOnConnect,
+			RunOnConnectRestart:   p.conf.RunOnConnectRestart,
+			RunOnDisconnect:       p.conf.RunOnDisconnect,
+			ExternalCmdPool:       p.externalCmdPool,
+			Metrics:               p.metrics,
+			PathManager:           p.pathManager,
+			Parent:                p,
 		}
 		err = i.Initialize()
 		if err != nil {

@@ -412,6 +412,10 @@ type Conf struct {
 	SRT        bool   `json:"srt"`
 	SRTAddress string `json:"srtAddress"`
 
+	// MPEG-TS / SRT input analysis. This is the global default of the
+	// identically named path parameter; the path-level value takes precedence.
+	MPEGTSAnalyzeDuration Duration `json:"mpegtsAnalyzeDuration"`
+
 	// MoQ server
 	MoQ               bool       `json:"moq"`
 	MoQHTTP2Address   string     `json:"moqHTTP2Address"`
@@ -663,6 +667,16 @@ func (conf *Conf) validate(l logger.Writer) error {
 
 	if conf.UDPMaxPayloadSize > 1472 {
 		return fmt.Errorf("'udpMaxPayloadSize' must be less than 1472")
+	}
+
+	if conf.MPEGTSAnalyzeDuration < 0 {
+		return fmt.Errorf("'mpegtsAnalyzeDuration' must be greater than or equal to zero")
+	}
+
+	// A top-level mpegtsAnalyzeDuration acts as the default for every path,
+	// while a path-level (or pathDefaults) value takes precedence.
+	if conf.MPEGTSAnalyzeDuration > 0 && conf.PathDefaults.MPEGTSAnalyzeDuration == 0 {
+		conf.PathDefaults.MPEGTSAnalyzeDuration = conf.MPEGTSAnalyzeDuration
 	}
 
 	// Authentication (deprecated params)

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
-	mcmpegts "github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts"
 
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
@@ -130,7 +129,7 @@ func (s *Source) Run(params defs.StaticSourceRunParams) error {
 
 	readerErr := make(chan error)
 	go func() {
-		readerErr <- s.runReader(nc)
+		readerErr <- s.runReader(nc, time.Duration(params.Conf.MPEGTSAnalyzeDuration))
 	}()
 
 	for {
@@ -149,13 +148,22 @@ func (s *Source) Run(params defs.StaticSourceRunParams) error {
 	}
 }
 
-func (s *Source) runReader(nc net.Conn) error {
+func (s *Source) runReader(nc net.Conn, analyzeDuration time.Duration) error {
 	nc.SetReadDeadline(time.Now().Add(time.Duration(s.ReadTimeout)))
-	mr := &mcmpegts.Reader{R: nc}
-	err := mr.Initialize()
+
+	if analyzeDuration > 0 {
+		s.Log(logger.Info, "analyzing MPEG-TS tracks for %s before publishing", analyzeDuration)
+	}
+
+	mr, stopAnalysis, err := mpegts.AnalyzeReader(nc, mpegts.StartupAnalysis{
+		Duration:    analyzeDuration,
+		ReadTimeout: time.Duration(s.ReadTimeout),
+		Log:         s,
+	})
 	if err != nil {
 		return err
 	}
+	defer stopAnalysis()
 
 	decodeErrors := &errordumper.Dumper{
 		OnReport: func(val uint64, last error) {
