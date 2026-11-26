@@ -3,6 +3,7 @@ package stream
 import (
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
@@ -90,6 +91,7 @@ type SubStream struct {
 	Stream        *Stream
 	InDesc        *description.Session
 	UseRTPPackets bool
+	NTPAligner    *NTPAligner
 
 	medias map[*description.Media]*subStreamMedia
 }
@@ -178,4 +180,33 @@ func (ss *SubStream) WriteUnit(inMedia *description.Media, inFormat format.Forma
 	ssf := ssm.formats[inFormat]
 
 	ssf.writeUnit(u)
+}
+
+// SetNTPOffset sets the NTP offset of a track, used to align tracks that
+// share the same capture clock. It has no effect when NTP is not replaced or
+// on always available streams, whose offline/online time continuity is
+// handled separately.
+func (ss *SubStream) SetNTPOffset(
+	inMedia *description.Media,
+	inFormat format.Format,
+	offset time.Duration,
+) {
+	ss.Stream.mutex.RLock()
+	defer ss.Stream.mutex.RUnlock()
+
+	if ss.Stream.subStream != ss {
+		return
+	}
+
+	ssm := ss.medias[inMedia]
+	if ssm == nil {
+		return
+	}
+
+	ssf := ssm.formats[inFormat]
+	if ssf != nil &&
+		!ssf.streamFormat.alwaysAvailable &&
+		ssf.streamFormat.ntpEstimator != nil {
+		ssf.streamFormat.ntpEstimator.SetOffset(offset)
+	}
 }
